@@ -1,20 +1,28 @@
 package org.example;
 
-import org.apache.http.client.fluent.Content;
+import com.fasterxml.jackson.annotation.JsonProperty;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import org.apache.http.HttpEntity;
 import org.apache.http.client.fluent.Request;
 import org.apache.http.entity.ContentType;
 
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.util.HashMap;
+import java.util.Map;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.locks.Lock;
 import java.util.concurrent.locks.ReentrantLock;
 
 public class CrptApi {
+    private String URI = "https://ismp.crpt.ru/api/v3/lk/documents/commissioning/contract/create";
     private final int requestLimit;
     private final long timeIntervalMillis;
     private long lastResetTime;
     private int requestCount;
     private final Lock lock;
+    ObjectMapper mapper = new ObjectMapper();
+
 
     public CrptApi(TimeUnit timeUnit, int requestLimit) {
         this.requestLimit = requestLimit;
@@ -24,63 +32,148 @@ public class CrptApi {
         this.lock = new ReentrantLock();
     }
 
-    public void createDocument(Document document, String signature) throws InterruptedException, IOException {
-        // Acquire a lock to ensure thread safety
+    public DocumentIdentifier createDocument(String pg, Document document, String signature) throws InterruptedException {
         lock.lock();
         try {
             long currentTime = System.currentTimeMillis();
 
-            // Check if the time interval has passed since the last reset
             if (currentTime - lastResetTime >= timeIntervalMillis) {
-                // Reset the request count and update the last reset time
                 requestCount = 0;
                 lastResetTime = currentTime;
             }
 
-            // Check if the request count exceeds the limit
             if (requestCount >= requestLimit) {
                 long sleepTime = lastResetTime + timeIntervalMillis - currentTime;
                 if (sleepTime > 0) {
-                    // Sleep to wait until the time interval elapses
                     Thread.sleep(sleepTime);
                 }
-                // Reset the request count and update the last reset time
                 requestCount = 0;
                 lastResetTime = System.currentTimeMillis();
             }
 
-            final Content postResultForm = Request.Post("https://reqres.in/api/users")
-                    .bodyString("{\"name\": \"morpheus\",\"job\":\"leader\"}", ContentType.APPLICATION_JSON)
-                    .execute().returnContent();
-            System.out.println(postResultForm.asString());
+            Map<String, String> map = new HashMap<>();
+            map.put("pg", pg);
+            URI = addParams(map);
 
-            // Increment the request count
+            document.setSignature(signature);
+            String jsonDocument = mapper.writeValueAsString(document);
+
+            final HttpEntity postResultForm = Request.Post(URI)
+                    .bodyString(jsonDocument, ContentType.APPLICATION_JSON)
+                    .execute().returnResponse().getEntity();
+            String entityString = new String(postResultForm.getContent().readAllBytes(), StandardCharsets.UTF_8);
+            DocumentIdentifier documentIdentifier = mapper.readValue(
+                    entityString,
+                    DocumentIdentifier.class
+            );
+
             requestCount++;
+            return documentIdentifier;
+        } catch (IOException e) {
+            throw new RuntimeException(e);
         } finally {
-            // Release the lock
             lock.unlock();
         }
     }
 
-    // Inner class to represent the document
+    private String addParams(Map<String, String> params) {
+        URI += "?";
+        for (Map.Entry<String, String> param : params.entrySet()) {
+            URI += param.getKey() + "=" + param.getValue() + "&";
+        }
+        return URI;
+    }
+
     private static class Document {
-        // Implement the document structure as needed
+        @JsonProperty("document_format")
+        private DocumentFormat documentFormat;
+        @JsonProperty("product_document")
+        private String productDocument;
+        @JsonProperty("product_group")
+        private String productGroup;
+        private String signature;
+
+        public Document(DocumentFormat documentFormat, String productDocument, String productGroup) {
+            this.documentFormat = documentFormat;
+            this.productDocument = productDocument;
+            this.productGroup = productGroup;
+        }
+
+        public DocumentFormat getDocumentFormat() {
+            return documentFormat;
+        }
+
+        public String getProductDocument() {
+            return productDocument;
+        }
+
+        public String getProductGroup() {
+            return productGroup;
+        }
+
+        public String getSignature() {
+            return signature;
+        }
+
+        public void setSignature(String signature) {
+            this.signature = signature;
+        }
+    }
+
+    public enum DocumentFormat {
+
+        MANUAL,
+        XML,
+        CSV
+    }
+
+    private static class DocumentIdentifier {
+        private String value;
+        private String timestamp;
+        private String code;
+        private String error;
+        private String message;
+        private String path;
+
+        public void setValue(String value) {
+            this.value = value;
+        }
+
+        public void setCode(String code) {
+            this.code = code;
+        }
+
+        public void setTimestamp(String timestamp) {
+            this.timestamp = timestamp;
+        }
+
+        public void setError(String error) {
+            this.error = error;
+        }
+
+        public void setMessage(String message) {
+            this.message = message;
+        }
+
+        public void setPath(String path) {
+            this.path = path;
+        }
     }
 
     public static void main(String[] args) {
         CrptApi api = new CrptApi(TimeUnit.MINUTES, 5);
 
         try {
-            // Create a document and signature
-            Document document = new Document();
+            Document document = new Document(
+                    DocumentFormat.MANUAL,
+                    "productDocument",
+                    "productGroup"
+            );
             String signature = "sampleSignature";
 
-            // Call the createDocument method
-            api.createDocument(document, signature);
+            DocumentIdentifier documentIdentifier = api.createDocument("milk", document, signature);
         } catch (InterruptedException e) {
             e.printStackTrace();
-        } catch (IOException e) {
-            throw new RuntimeException(e);
         }
     }
 }
